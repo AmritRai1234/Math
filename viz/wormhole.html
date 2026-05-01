@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Einstein-Rosen Bridge — Wormhole Dynamics</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#040408;color:#e0e0e8;font-family:'Inter',sans-serif;overflow:hidden;height:100vh}
+canvas{position:fixed;top:0;left:0}
+.overlay{position:fixed;z-index:10;pointer-events:none}
+
+.title-panel{top:24px;left:28px}
+.title-panel h1{font-size:26px;font-weight:800;letter-spacing:-0.5px;
+  background:linear-gradient(135deg,#4af,#a06aff,#ff6a6a);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.title-panel p{font-size:12px;color:#667;margin-top:4px;max-width:320px;line-height:1.5}
+
+.metrics{top:24px;right:28px;text-align:right}
+.metric{margin-bottom:12px}
+.metric-label{font-size:9px;text-transform:uppercase;letter-spacing:1.5px;color:#556;font-weight:600}
+.metric-value{font-size:20px;font-weight:600;font-family:'JetBrains Mono',monospace;margin-top:1px}
+
+.info-panel{bottom:24px;left:28px;max-width:340px}
+.info-panel .phase{font-size:13px;font-weight:600;margin-bottom:4px}
+.info-panel .desc{font-size:11px;color:#667;line-height:1.6}
+
+.controls{bottom:24px;right:28px;display:flex;gap:8px;pointer-events:all}
+.btn{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);
+  border-radius:8px;padding:8px 16px;color:#aaa;font-family:'Inter',sans-serif;
+  font-size:11px;font-weight:600;cursor:pointer;transition:all .2s;backdrop-filter:blur(8px)}
+.btn:hover{background:rgba(100,170,255,0.15);border-color:rgba(100,170,255,0.3);color:#fff}
+.btn.active{background:rgba(100,170,255,0.2);border-color:#4af;color:#fff}
+
+.tab-bar{top:24px;left:50%;transform:translateX(-50%);display:flex;gap:4px;
+  background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+  border-radius:10px;padding:4px;pointer-events:all;backdrop-filter:blur(8px)}
+.tab{padding:6px 16px;border-radius:7px;font-size:11px;font-weight:600;color:#667;
+  cursor:pointer;transition:all .2s}
+.tab.active{background:rgba(100,170,255,0.15);color:#4af}
+.tab:hover{color:#aaa}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div class="overlay title-panel">
+  <h1>Einstein-Rosen Bridge</h1>
+  <p>Schwarzschild wormhole — the throat collapses before anything can cross. Space itself changes the rules.</p>
+</div>
+
+<div class="overlay tab-bar">
+  <div class="tab active" onclick="setView(0)">Wormhole</div>
+  <div class="tab" onclick="setView(1)">Particle Fall</div>
+  <div class="tab" onclick="setView(2)">Lorenz Parallel</div>
+</div>
+
+<div class="overlay metrics">
+  <div class="metric"><div class="metric-label">Throat Radius</div><div class="metric-value" id="m-throat">2.00 Rs</div></div>
+  <div class="metric"><div class="metric-label">Proper Time</div><div class="metric-value" id="m-time">0.00 s</div></div>
+  <div class="metric"><div class="metric-label">Tidal Force</div><div class="metric-value" id="m-tidal">0.00</div></div>
+  <div class="metric"><div class="metric-label">Redshift z</div><div class="metric-value" id="m-redshift">0.00</div></div>
+</div>
+
+<div class="overlay info-panel">
+  <div class="phase" id="info-phase">⏳ Bridge Forming</div>
+  <div class="desc" id="info-desc">The Einstein-Rosen bridge opens as two singularities connect through spacetime.</div>
+</div>
+
+<div class="overlay controls">
+  <button class="btn active" id="btn-pp" onclick="togglePause()">⏸ Pause</button>
+  <button class="btn" onclick="resetSim()">↻ Reset</button>
+  <button class="btn" onclick="toggleGrid()">Grid</button>
+</div>
+
+<script>
+const c=document.getElementById('c'),ctx=c.getContext('2d');
+let W,H;
+function resize(){W=c.width=innerWidth;H=c.height=innerHeight}
+addEventListener('resize',resize);resize();
+
+// ── State ──
+let t=0, paused=false, showGrid=true, view=0;
+let particleR=8, particleV=0, particleTrail=[];
+// Lorenz state
+let lx=1,ly=1,lz=1,lTrail=[];
+
+const Rs=2; // Schwarzschild radius
+const dt=0.016;
+
+function setView(v){
+  view=v;
+  document.querySelectorAll('.tab').forEach((el,i)=>{el.classList.toggle('active',i===v)});
+  if(v===1){particleR=8;particleV=0;particleTrail=[];}
+  if(v===2){lx=1;ly=1;lz=1;lTrail=[];}
+  t=0;
+}
+
+// ── Embedding: z(r) for Schwarzschild wormhole ──
+// Flamm's paraboloid: z = 2√(r/Rs - 1) * Rs (for r >= Rs)
+// For dynamic throat, throat_radius oscillates then collapses
+function throatRadius(time){
+  // Bridge forms, holds briefly, then collapses
+  const cycle=time%18;
+  if(cycle<4) return Rs*(0.3+0.7*cycle/4); // forming
+  if(cycle<8) return Rs*(1.0+0.15*Math.sin(cycle*2)); // stable-ish
+  if(cycle<12) return Rs*(1.0-0.7*(cycle-8)/4); // collapsing
+  return Rs*0.3; // pinched
+}
+
+function flammZ(r, throat){
+  if(r<throat) return null;
+  return 2*Math.sqrt(Math.max(0,(r-throat))*throat);
+}
+
+// ── Draw embedding diagram (the funnel) ──
+function drawWormhole(){
+  const cx=W/2, cy=H/2;
+  const throat=throatRadius(t);
+  const scale=Math.min(W,H)*0.06;
+
+  // Spacetime grid
+  if(showGrid){
+    ctx.globalAlpha=0.08;
+    ctx.strokeStyle='#4af';
+    // Radial lines
+    for(let angle=0;angle<Math.PI*2;angle+=Math.PI/12){
+      ctx.beginPath();
+      for(let r=throat;r<throat+12;r+=0.15){
+        const z=flammZ(r,throat);
+        if(z===null)continue;
+        const sx=Math.cos(angle)*(r-throat)*scale*1.5;
+        // Upper sheet
+        const sy_u=-z*scale-10;
+        if(r===throat)ctx.moveTo(cx+sx,cy+sy_u);
+        else ctx.lineTo(cx+sx,cy+sy_u);
+      }
+      ctx.stroke();
+      // Lower sheet
+      ctx.beginPath();
+      for(let r=throat;r<throat+12;r+=0.15){
+        const z=flammZ(r,throat);
+        if(z===null)continue;
+        const sx=Math.cos(angle)*(r-throat)*scale*1.5;
+        const sy_l=z*scale+10;
+        if(r===throat)ctx.moveTo(cx+sx,cy+sy_l);
+        else ctx.lineTo(cx+sx,cy+sy_l);
+      }
+      ctx.stroke();
+    }
+    // Circumferential rings
+    for(let r=throat;r<throat+10;r+=1.0){
+      const z=flammZ(r,throat);
+      if(z===null)continue;
+      const radius=(r-throat)*scale*1.5;
+      if(radius<2)continue;
+      ctx.beginPath();ctx.ellipse(cx,cy-z*scale-10,radius,radius*0.3,0,0,Math.PI*2);ctx.stroke();
+      ctx.beginPath();ctx.ellipse(cx,cy+z*scale+10,radius,radius*0.3,0,0,Math.PI*2);ctx.stroke();
+    }
+    ctx.globalAlpha=1;
+  }
+
+  // Draw the funnel profile (cross section)
+  // Upper sheet (our universe)
+  ctx.beginPath();
+  ctx.moveTo(cx,cy-10);
+  for(let r=throat;r<throat+14;r+=0.1){
+    const z=flammZ(r,throat);if(z===null)continue;
+    ctx.lineTo(cx+(r-throat)*scale*1.8, cy-z*scale-10);
+  }
+  ctx.strokeStyle='rgba(100,170,255,0.6)';ctx.lineWidth=2;ctx.stroke();
+  // Mirror
+  ctx.beginPath();ctx.moveTo(cx,cy-10);
+  for(let r=throat;r<throat+14;r+=0.1){
+    const z=flammZ(r,throat);if(z===null)continue;
+    ctx.lineTo(cx-(r-throat)*scale*1.8, cy-z*scale-10);
+  }
+  ctx.stroke();
+
+  // Lower sheet (other universe)
+  ctx.beginPath();ctx.moveTo(cx,cy+10);
+  for(let r=throat;r<throat+14;r+=0.1){
+    const z=flammZ(r,throat);if(z===null)continue;
+    ctx.lineTo(cx+(r-throat)*scale*1.8, cy+z*scale+10);
+  }
+  ctx.strokeStyle='rgba(255,106,106,0.6)';ctx.lineWidth=2;ctx.stroke();
+  ctx.beginPath();ctx.moveTo(cx,cy+10);
+  for(let r=throat;r<throat+14;r+=0.1){
+    const z=flammZ(r,throat);if(z===null)continue;
+    ctx.lineTo(cx-(r-throat)*scale*1.8, cy+z*scale+10);
+  }
+  ctx.stroke();
+
+  // Throat glow
+  const throatGlow=ctx.createRadialGradient(cx,cy,0,cx,cy,throat*scale*2);
+  const intensity=Math.max(0.1,1-throat/Rs);
+  throatGlow.addColorStop(0,`rgba(160,106,255,${0.3+intensity*0.4})`);
+  throatGlow.addColorStop(0.5,`rgba(100,170,255,${0.1*intensity})`);
+  throatGlow.addColorStop(1,'transparent');
+  ctx.fillStyle=throatGlow;
+  ctx.fillRect(cx-200,cy-200,400,400);
+
+  // Throat circle
+  ctx.beginPath();
+  ctx.ellipse(cx,cy,throat*scale*0.8,throat*scale*0.25,0,0,Math.PI*2);
+  ctx.strokeStyle=`rgba(160,106,255,${0.4+intensity*0.5})`;
+  ctx.lineWidth=2+intensity*3;ctx.stroke();
+
+  // Labels
+  ctx.font='11px Inter';ctx.fillStyle='rgba(100,170,255,0.7)';
+  ctx.fillText('Our Universe',cx+100,cy-120);
+  ctx.fillStyle='rgba(255,106,106,0.7)';
+  ctx.fillText('Other Side',cx+100,cy+130);
+  ctx.fillStyle='rgba(160,106,255,0.8)';
+  ctx.fillText('Throat (singularity)',cx+throat*scale+10,cy);
+
+  return throat;
+}
+
+// ── Particle falling into wormhole ──
+function drawParticleFall(){
+  const throat=drawWormhole();
+  const cx=W/2, cy=H/2, scale=Math.min(W,H)*0.06;
+
+  // Geodesic: dr/dτ for radial freefall
+  if(!paused){
+    const r=particleR;
+    if(r>throat+0.05){
+      const accel=-Rs/(2*r*r)*(1-Rs/r);
+      particleV+=accel*dt*3;
+      particleR+=particleV*dt*3;
+    }
+  }
+
+  const r=Math.max(throat,particleR);
+  const z=flammZ(r,throat)||0;
+  const px=cx+(r-throat)*scale*1.8;
+  const py=cy-z*scale-10;
+
+  particleTrail.push({x:px,y:py,r});
+  if(particleTrail.length>300)particleTrail.shift();
+
+  // Draw trail
+  for(let i=1;i<particleTrail.length;i++){
+    const alpha=i/particleTrail.length*0.6;
+    ctx.beginPath();
+    ctx.moveTo(particleTrail[i-1].x,particleTrail[i-1].y);
+    ctx.lineTo(particleTrail[i].x,particleTrail[i].y);
+    ctx.strokeStyle=`rgba(255,200,50,${alpha})`;
+    ctx.lineWidth=2;ctx.stroke();
+  }
+
+  // Spaghettification effect — stretch the particle as it nears throat
+  const stretch=1+Math.max(0,3/(particleR-throat+0.5));
+  const squish=1/Math.sqrt(stretch);
+
+  // Particle
+  ctx.save();ctx.translate(px,py);ctx.scale(squish,stretch);
+  const pg=ctx.createRadialGradient(0,0,0,0,0,8);
+  pg.addColorStop(0,'rgba(255,220,80,1)');pg.addColorStop(0.5,'rgba(255,150,30,0.6)');pg.addColorStop(1,'transparent');
+  ctx.fillStyle=pg;ctx.beginPath();ctx.arc(0,0,8,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(0,0,2,0,Math.PI*2);ctx.fill();
+  ctx.restore();
+
+  // Tidal force indicator
+  const tidal=Rs/(r*r*r)*1000;
+  ctx.font='10px JetBrains Mono';ctx.fillStyle='rgba(255,200,50,0.7)';
+  ctx.fillText(`r = ${r.toFixed(2)} Rs`,px+15,py-5);
+  ctx.fillText(`stretch: ${stretch.toFixed(1)}x`,px+15,py+10);
+
+  // Reset if reached throat
+  if(particleR<=throat+0.05){
+    setTimeout(()=>{particleR=8;particleV=0;particleTrail=[];},2000);
+  }
+
+  return {throat,tidal,r};
+}
+
+// ── Lorenz parallel view ──
+function drawLorenzParallel(){
+  const throat=drawWormhole();
+  const cx=W/2, cy=H/2;
+
+  // Run Lorenz with entropy feedback
+  if(!paused){
+    const energy=lx*lx+ly*ly+lz*lz;
+    // Entropy from recent energy
+    const entropy=Math.log(Math.max(1,energy))*0.5;
+    const sigma=10+2*Math.sin(entropy);
+    const rho=28+5*Math.cos(entropy*0.5);
+    const beta=8/3+0.5*Math.sin(entropy*0.3);
+
+    for(let i=0;i<4;i++){
+      const dlx=sigma*(ly-lx)*0.003;
+      const dly=(lx*(rho-lz)-ly)*0.003;
+      const dlz=(lx*ly-beta*lz)*0.003;
+      lx+=dlx;ly+=dly;lz+=dlz;
+    }
+    lTrail.push({x:lx,y:ly,z:lz});
+    if(lTrail.length>3000)lTrail.shift();
+  }
+
+  // Draw Lorenz in bottom-right corner
+  const ox=W-180, oy=H-160, sc=3;
+  ctx.save();ctx.globalAlpha=0.6;
+  for(let i=1;i<lTrail.length;i++){
+    const a=i/lTrail.length;
+    const p0=lTrail[i-1], p1=lTrail[i];
+    ctx.beginPath();
+    ctx.moveTo(ox+p0.x*sc*0.15-p0.y*sc*0.1, oy-p0.z*sc*0.15+p0.y*sc*0.05);
+    ctx.lineTo(ox+p1.x*sc*0.15-p1.y*sc*0.1, oy-p1.z*sc*0.15+p1.y*sc*0.05);
+    const hue=200+a*160;
+    ctx.strokeStyle=`hsla(${hue},70%,60%,${a*0.7})`;
+    ctx.lineWidth=0.8;ctx.stroke();
+  }
+  ctx.restore();
+
+  // Label
+  ctx.font='10px Inter';ctx.fillStyle='rgba(160,106,255,0.6)';
+  ctx.fillText('Entropic Lorenz',ox-30,oy+30);
+  ctx.fillText('(same principle)',ox-30,oy+44);
+
+  // Draw connection line
+  ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.moveTo(cx+60,cy);ctx.lineTo(ox-50,oy-40);
+  ctx.strokeStyle='rgba(160,106,255,0.15)';ctx.lineWidth=1;ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Comparison text
+  ctx.font='12px Inter';ctx.fillStyle='rgba(255,255,255,0.5)';
+  const msgs=[
+    'Wormhole throat ↔ Lorenz crossing point',
+    'Throat collapse ↔ Parameter shift',
+    'Space changes its own geometry ↔ System changes its own rules',
+  ];
+  msgs.forEach((m,i)=>{
+    ctx.fillStyle=`rgba(255,255,255,${0.3+i*0.1})`;
+    ctx.fillText('• '+m, 28, H-90+i*18);
+  });
+
+  return {throat,tidal:0,r:0};
+}
+
+// ── Main loop ──
+function loop(){
+  // Fade
+  ctx.fillStyle='rgba(4,4,8,0.2)';ctx.fillRect(0,0,W,H);
+
+  // Stars background
+  if(Math.random()<0.3){
+    ctx.fillStyle=`rgba(255,255,255,${Math.random()*0.3})`;
+    ctx.fillRect(Math.random()*W,Math.random()*H,1,1);
+  }
+
+  if(!paused) t+=dt;
+
+  let throat=Rs, tidal=0, r=0;
+  if(view===0){ throat=drawWormhole(); }
+  else if(view===1){ const d=drawParticleFall(); throat=d.throat;tidal=d.tidal;r=d.r; }
+  else { const d=drawLorenzParallel(); throat=d.throat; }
+
+  // Update metrics
+  document.getElementById('m-throat').textContent=(throat/Rs).toFixed(2)+' Rs';
+  document.getElementById('m-throat').style.color=throat<Rs*0.5?'#ff6a6a':'#4af';
+  document.getElementById('m-time').textContent=t.toFixed(2)+' τ';
+  const tidalVal=view===1?Rs/Math.max(0.1,(particleR||1))**3*100:Rs/Math.max(0.1,throat)**3*100;
+  document.getElementById('m-tidal').textContent=tidalVal.toFixed(1);
+  document.getElementById('m-tidal').style.color=tidalVal>50?'#ff6a6a':tidalVal>10?'#ffa64d':'#4af';
+  const redshift=view===1?1/Math.sqrt(Math.max(0.01,1-Rs/Math.max(Rs+0.01,particleR)))-1:0;
+  document.getElementById('m-redshift').textContent=redshift.toFixed(2);
+
+  // Phase info
+  const cycle=t%18;
+  let phase,desc;
+  if(cycle<4){phase='🌀 Bridge Forming';desc='Two regions of spacetime connect. The throat expands as the bridge opens.';}
+  else if(cycle<8){phase='🌉 Bridge Open';desc='The Einstein-Rosen bridge is momentarily traversable — but barely. The throat oscillates near the Schwarzschild radius.';}
+  else if(cycle<12){phase='⚠️ Bridge Collapsing';desc='The throat pinches shut. Space changes its own geometry — nothing can hold it open. Just like our Entropic Lorenz changes its own rules.';}
+  else{phase='💀 Bridge Closed';desc='The singularity is naked. The two universes are disconnected. The bridge existed for only a moment.';}
+  document.getElementById('info-phase').textContent=phase;
+  document.getElementById('info-desc').textContent=desc;
+
+  requestAnimationFrame(loop);
+}
+
+function togglePause(){paused=!paused;const b=document.getElementById('btn-pp');b.textContent=paused?'▶ Play':'⏸ Pause';b.classList.toggle('active',!paused)}
+function resetSim(){t=0;particleR=8;particleV=0;particleTrail=[];lx=1;ly=1;lz=1;lTrail=[];ctx.fillStyle='#040408';ctx.fillRect(0,0,W,H)}
+function toggleGrid(){showGrid=!showGrid}
+
+loop();
+</script>
+</body>
+</html>

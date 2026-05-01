@@ -124,3 +124,4 @@ pub mod decomposition;
 pub mod logic_prop;
 pub mod prediction;
 pub mod hybrid;
+pub mod chaos_crypto;

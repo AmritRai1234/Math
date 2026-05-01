@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Entropic Lorenz — Self-Aware Chaos</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a0f;color:#e0e0e8;font-family:'Inter',sans-serif;overflow:hidden;height:100vh;width:100vw}
+#canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:0}
+
+.overlay{position:fixed;z-index:10;pointer-events:none}
+.title-panel{top:28px;left:32px}
+.title-panel h1{font-size:28px;font-weight:800;letter-spacing:-0.5px;
+  background:linear-gradient(135deg,#7c6aff,#ff6ac1,#ffa64d);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.title-panel p{font-size:13px;color:#888;margin-top:4px;font-weight:300;max-width:340px;line-height:1.5}
+
+.stats-panel{top:28px;right:32px;text-align:right}
+.stat{margin-bottom:14px}
+.stat-label{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#666;font-weight:600}
+.stat-value{font-size:22px;font-weight:600;font-family:'JetBrains Mono',monospace;margin-top:2px}
+
+.params-panel{bottom:28px;left:32px;display:flex;gap:24px}
+.param{background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.06);
+  border-radius:10px;padding:12px 16px;backdrop-filter:blur(12px);min-width:100px}
+.param-name{font-size:10px;text-transform:uppercase;letter-spacing:1.5px;color:#666;font-weight:600}
+.param-val{font-size:18px;font-weight:600;font-family:'JetBrains Mono',monospace;margin-top:4px}
+
+.controls{bottom:28px;right:32px;display:flex;gap:10px;pointer-events:all}
+.btn{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);
+  border-radius:8px;padding:10px 20px;color:#ccc;font-family:'Inter',sans-serif;
+  font-size:12px;font-weight:600;cursor:pointer;letter-spacing:0.5px;
+  transition:all .2s;backdrop-filter:blur(12px)}
+.btn:hover{background:rgba(124,106,255,0.2);border-color:rgba(124,106,255,0.4);color:#fff}
+.btn.active{background:rgba(124,106,255,0.3);border-color:#7c6aff;color:#fff}
+
+.entropy-bar{bottom:100px;right:32px;width:8px;height:200px;
+  background:rgba(255,255,255,0.04);border-radius:4px;border:1px solid rgba(255,255,255,0.06);
+  overflow:hidden;position:relative}
+.entropy-fill{position:absolute;bottom:0;left:0;width:100%;border-radius:3px;
+  transition:height .1s,background .3s}
+.entropy-label{bottom:306px;right:24px;font-size:10px;text-transform:uppercase;
+  letter-spacing:1.5px;color:#666;font-weight:600;writing-mode:vertical-rl}
+
+.legend{bottom:28px;left:50%;transform:translateX(-50%);display:flex;gap:20px;
+  background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);
+  border-radius:10px;padding:10px 20px;backdrop-filter:blur(12px)}
+.legend-item{display:flex;align-items:center;gap:6px;font-size:11px;color:#999}
+.legend-dot{width:8px;height:8px;border-radius:50%}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div class="overlay title-panel">
+  <h1>Entropic Lorenz</h1>
+  <p>A chaotic system that monitors its own entropy and adapts its parameters — self-organizing toward the edge of chaos.</p>
+</div>
+
+<div class="overlay stats-panel">
+  <div class="stat">
+    <div class="stat-label">Entropy</div>
+    <div class="stat-value" id="entropy-val">0.00</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Points</div>
+    <div class="stat-value" id="points-val">0</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Regime</div>
+    <div class="stat-value" id="regime-val" style="font-size:14px">—</div>
+  </div>
+</div>
+
+<div class="overlay params-panel">
+  <div class="param"><div class="param-name">σ (sigma)</div><div class="param-val" id="p-sigma">10.00</div></div>
+  <div class="param"><div class="param-name">ρ (rho)</div><div class="param-val" id="p-rho">28.00</div></div>
+  <div class="param"><div class="param-name">β (beta)</div><div class="param-val" id="p-beta">2.67</div></div>
+</div>
+
+<div class="overlay entropy-label">ENTROPY</div>
+<div class="overlay entropy-bar"><div class="entropy-fill" id="entropy-fill"></div></div>
+
+<div class="overlay controls">
+  <button class="btn active" id="btn-play" onclick="togglePause()">⏸ Pause</button>
+  <button class="btn" onclick="resetSim()">↻ Reset</button>
+  <button class="btn" onclick="toggleTrail()">Trail</button>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+// ── Simulation State ──
+let x = 1.0, y = 1.0, z = 1.0;
+const dt = 0.003;
+const trail = [];
+const MAX_TRAIL = 12000;
+let history = [];
+let entropy = 1.0;
+let sigma = 10, rho = 28, beta = 8/3;
+let paused = false;
+let showTrail = true;
+let rotAngle = 0;
+let mouseX = 0, mouseY = 0;
+
+// ── Camera ──
+document.addEventListener('mousemove', e => {
+  mouseX = (e.clientX / W - 0.5) * 2;
+  mouseY = (e.clientY / H - 0.5) * 2;
+});
+
+function project(px, py, pz) {
+  const a = rotAngle + mouseX * 0.5;
+  const cosA = Math.cos(a), sinA = Math.sin(a);
+  const rx = px * cosA - py * sinA;
+  const ry = px * sinA + py * cosA;
+  const tilt = 0.3 + mouseY * 0.2;
+  const cosT = Math.cos(tilt), sinT = Math.sin(tilt);
+  const ry2 = ry * cosT - pz * sinT;
+  const rz = ry * sinT + pz * cosT;
+  const scale = 280 / (280 + rz);
+  return { x: W/2 + rx * scale * 8, y: H/2 - ry2 * scale * 8, z: rz, s: scale };
+}
+
+// ── Entropy color mapping ──
+function entropyColor(e, alpha) {
+  const t = Math.max(0, Math.min(1, (e + 2) / 10));
+  // Low entropy = cool blue/purple, high entropy = hot pink/orange
+  const r = Math.floor(80 + t * 175);
+  const g = Math.floor(60 + (1 - Math.abs(t - 0.5) * 2) * 100);
+  const b = Math.floor(220 - t * 140);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+// ── Simulation Step ──
+function step() {
+  // Measure entropy from trajectory energy variance
+  const energy = x*x + y*y + z*z;
+  history.push(energy);
+  if (history.length > 50) history.shift();
+
+  if (history.length > 10) {
+    const tail = history.slice(-20);
+    const mean = tail.reduce((a,b) => a+b, 0) / tail.length;
+    const variance = tail.reduce((a,b) => a + (b-mean)*(b-mean), 0) / tail.length;
+    entropy = variance > 1e-10 ? 0.5 * Math.log(variance) : 0;
+  }
+
+  // Entropy modulates parameters — the key innovation
+  sigma = 10.0 + 2.0 * Math.sin(entropy);
+  rho   = 28.0 + 5.0 * Math.cos(entropy * 0.5);
+  beta  = 8/3  + 0.5 * Math.sin(entropy * 0.3);
+
+  // RK4 integration for accuracy
+  const f = (x,y,z) => [sigma*(y-x), x*(rho-z)-y, x*y-beta*z];
+  const k1 = f(x, y, z);
+  const k2 = f(x+dt/2*k1[0], y+dt/2*k1[1], z+dt/2*k1[2]);
+  const k3 = f(x+dt/2*k2[0], y+dt/2*k2[1], z+dt/2*k2[2]);
+  const k4 = f(x+dt*k3[0], y+dt*k3[1], z+dt*k3[2]);
+
+  x += dt/6*(k1[0]+2*k2[0]+2*k3[0]+k4[0]);
+  y += dt/6*(k1[1]+2*k2[1]+2*k3[1]+k4[1]);
+  z += dt/6*(k1[2]+2*k2[2]+2*k3[2]+k4[2]);
+
+  trail.push({ x, y, z: z-25, e: entropy });
+  if (trail.length > MAX_TRAIL) trail.shift();
+}
+
+// ── Render ──
+function render() {
+  ctx.fillStyle = 'rgba(10,10,15,0.15)';
+  ctx.fillRect(0, 0, W, H);
+
+  rotAngle += 0.002;
+
+  // Draw trail
+  if (showTrail && trail.length > 2) {
+    for (let i = 1; i < trail.length; i++) {
+      const p0 = project(trail[i-1].x, trail[i-1].y, trail[i-1].z);
+      const p1 = project(trail[i].x, trail[i].y, trail[i].z);
+      const age = i / trail.length;
+      const alpha = age * age * 0.7;
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.strokeStyle = entropyColor(trail[i].e, alpha);
+      ctx.lineWidth = 0.8 + p1.s * 1.2;
+      ctx.stroke();
+    }
+  }
+
+  // Draw head glow
+  if (trail.length > 0) {
+    const last = trail[trail.length - 1];
+    const p = project(last.x, last.y, last.z);
+    const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 30 * p.s);
+    grad.addColorStop(0, entropyColor(last.e, 0.8));
+    grad.addColorStop(0.3, entropyColor(last.e, 0.2));
+    grad.addColorStop(1, 'transparent');
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 30 * p.s, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Core dot
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 3 * p.s, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+  }
+
+  // Update UI
+  document.getElementById('entropy-val').textContent = entropy.toFixed(2);
+  document.getElementById('entropy-val').style.color = entropyColor(entropy, 1);
+  document.getElementById('points-val').textContent = trail.length.toLocaleString();
+  document.getElementById('p-sigma').textContent = sigma.toFixed(2);
+  document.getElementById('p-rho').textContent = rho.toFixed(2);
+  document.getElementById('p-beta').textContent = beta.toFixed(2);
+
+  const regime = entropy > 6 ? '🔥 HYPER-CHAOS' : entropy > 3 ? '⚡ CHAOTIC' : entropy > 1 ? '🌊 TURBULENT' : '❄️ STABLE';
+  document.getElementById('regime-val').textContent = regime;
+
+  const barH = Math.max(2, Math.min(100, ((entropy + 2) / 10) * 100));
+  const fill = document.getElementById('entropy-fill');
+  fill.style.height = barH + '%';
+  fill.style.background = `linear-gradient(to top, ${entropyColor(entropy-2,1)}, ${entropyColor(entropy,1)})`;
+}
+
+// ── Loop ──
+function loop() {
+  if (!paused) { for (let i = 0; i < 8; i++) step(); }
+  render();
+  requestAnimationFrame(loop);
+}
+
+// ── Controls ──
+function togglePause() {
+  paused = !paused;
+  const btn = document.getElementById('btn-play');
+  btn.textContent = paused ? '▶ Play' : '⏸ Pause';
+  btn.classList.toggle('active', !paused);
+}
+
+function resetSim() {
+  x = 1 + Math.random()*0.1; y = 1; z = 1;
+  trail.length = 0; history.length = 0; entropy = 1;
+  ctx.fillStyle = '#0a0a0f'; ctx.fillRect(0,0,W,H);
+}
+
+function toggleTrail() { showTrail = !showTrail; if (!showTrail) { ctx.fillStyle='#0a0a0f'; ctx.fillRect(0,0,W,H); } }
+
+loop();
+</script>
+</body>
+</html>
