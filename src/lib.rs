@@ -122,3 +122,4 @@ pub mod dynamical_systems;
 pub mod diophantine;
 pub mod decomposition;
 pub mod logic_prop;
+pub mod prediction;
