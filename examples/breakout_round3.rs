@@ -58,13 +58,17 @@ fn main() {
     let s_obs = (ones - (n - ones)).abs() / n.sqrt();
     let monobit_pass = s_obs < 1.96; // 95% CI
 
-    // Runs test: count transitions
+    // Runs test: NIST SP 800-22 Wald-Wolfowitz formula
     let runs: usize = bits.windows(2).filter(|w| w[0] != w[1]).count() + 1;
     let pi = ones / n;
-    let runs_exp = 2.0 * n * pi * (1.0 - pi);
-    let runs_var = runs_exp * (1.0 - 2.0*pi).abs();
-    let runs_z = if runs_var > 0.0 { (runs as f64 - runs_exp) / runs_var.sqrt() } else { 0.0 };
-    let runs_pass = runs_z.abs() < 1.96;
+    // Pre-test: pi must be within 2/sqrt(n) of 0.5
+    let tau = 2.0 / n.sqrt();
+    let runs_exp = 2.0 * n * pi * (1.0 - pi) + 1.0; // NIST expected runs
+    let runs_std = (2.0 * n * pi * (1.0 - pi)).sqrt();  // NIST std deviation
+    let runs_z = if runs_std > 0.0 && (pi - 0.5).abs() < tau {
+        (runs as f64 - runs_exp).abs() / runs_std
+    } else { f64::INFINITY };
+    let runs_pass = runs_z < 1.96;
 
     // Block frequency test (block size 128)
     let block_size = 128usize;
