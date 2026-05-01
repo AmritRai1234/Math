@@ -1,0 +1,12 @@
+[package]
+name = "mathrs"
+version = "0.1.0"
+edition = "2021"
+description = "A comprehensive, zero-dependency math library for Rust"
+license = "MIT"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
